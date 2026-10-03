@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 
-export default function ProductPhotos({ multiple = false }) {
+export default function ProductPhotos({ multiple = false, editing = false }) {
   const id = useId();
   const inputRef = useRef(null);
   const [files, setFiles] = useState([]);
@@ -28,9 +28,13 @@ export default function ProductPhotos({ multiple = false }) {
           <ImagePlus size={22} /> {title}
         </span>
         <span className="photo-upload-hint">
-          {multiple
-            ? 'Show the details, texture, and inside of your wallet.'
-            : 'Choose your best photo. This appears in the product list.'}
+          {editing
+            ? multiple
+              ? 'Choose photos to replace all saved detail images, or leave empty to keep them.'
+              : 'Choose a new cover image, or leave empty to keep the current one.'
+            : multiple
+              ? 'Show the details, texture, and inside of your wallet.'
+              : 'Choose your best photo for the product details.'}
         </span>
         <input
           id={id}
@@ -40,7 +44,7 @@ export default function ProductPhotos({ multiple = false }) {
           type="file"
           accept="image/*"
           multiple={multiple}
-          required={!multiple}
+          required={!multiple && !editing}
           onChange={(event) => {
             const selected = [...event.target.files];
             const message =

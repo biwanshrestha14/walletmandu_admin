@@ -4,8 +4,16 @@ import { PackagePlus, Pencil, Plus, Trash2 } from 'lucide-react';
 import Dialog from '../components/Dialog';
 import ProductPhotos from '../components/ProductPhotos';
 import ProductGallery from '../components/ProductGallery';
+import ProductActions from '../components/ProductActions';
 
 export default function Products({ categories, onError }) {
+  const [detailHash, setDetailHash] = useState(window.location.hash);
+  useEffect(() => {
+    const sync = () => setDetailHash(window.location.hash);
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, []);
+  const showingDetails = detailHash.startsWith('#product=');
   const [deleting, setDeleting] = useState(null);
   const [deleteError, setDeleteError] = useState('');
   const [editing, setEditing] = useState(null);
@@ -15,6 +23,12 @@ export default function Products({ categories, onError }) {
     setEditing(product);
   };
   const [products, setProducts] = useState([]);
+  const viewing = showingDetails
+    ? products.find(
+        (product) =>
+          `#product=${encodeURIComponent(product.id)}` === detailHash,
+      )
+    : null;
   const [categoryId, setCategoryId] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -25,7 +39,7 @@ export default function Products({ categories, onError }) {
     let active = true;
     setLoading(true);
     api(
-      `/products${categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : ''}`,
+      `/products${!showingDetails && categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : ''}`,
     )
       .then((data) => {
         if (!Array.isArray(data))
@@ -44,7 +58,7 @@ export default function Products({ categories, onError }) {
     return () => {
       active = false;
     };
-  }, [categoryId, revision]);
+  }, [categoryId, revision, showingDetails]);
   async function toggleFeatured(product) {
     setBusy(true);
     setError('');
@@ -97,7 +111,21 @@ export default function Products({ categories, onError }) {
     setError('');
     setMessage('');
     setFormError('');
+    let photosSaved = false;
     try {
+      if (editing.id) {
+        const photos = new FormData();
+        for (const [key, value] of body.entries()) {
+          if (value instanceof File && value.size) photos.append(key, value);
+        }
+        if ([...photos.keys()].length) {
+          await api(`/products/${editing.id}`, {
+            method: 'PATCH',
+            body: photos,
+          });
+          photosSaved = true;
+        }
+      }
       const payload = editing.id
         ? JSON.stringify({
             name: form.elements.name.value.trim(),
@@ -122,7 +150,11 @@ export default function Products({ categories, onError }) {
       setEditing(null);
       setRevision((value) => value + 1);
     } catch (err) {
-      setFormError(err.message);
+      setFormError(
+        photosSaved
+          ? `Photos were saved, but product details could not be saved. ${err.message}`
+          : err.message,
+      );
       if ([401, 403].includes(err.status)) onError(err);
     } finally {
       setBusy(false);
@@ -130,180 +162,239 @@ export default function Products({ categories, onError }) {
   }
   return (
     <main className="admin-main">
-      <div className="admin-heading">
-        <div>
-          <span className="eyebrow">YOUR COLLECTION</span>
-          <h1>Products.</h1>
-          <p>
-            Manage your collection, update product details, and add something
-            new.
-          </p>
+      <div hidden={showingDetails}>
+        <div className="admin-heading">
+          <div>
+            <span className="eyebrow">YOUR COLLECTION</span>
+            <h1>Products.</h1>
+            <p>
+              Manage your collection, update product details, and add something
+              new.
+            </p>
+          </div>
+          <button
+            className="button primary"
+            onClick={() => openEditor()}
+          >
+            <Plus size={18} /> Create product
+          </button>
         </div>
-        <button
-          className="button primary"
-          onClick={() => openEditor()}
-        >
-          <Plus size={18} /> Create product
-        </button>
-      </div>
-      {error && (
-        <p
-          className="error"
-          role="alert"
-        >
-          {error}
-        </p>
-      )}
-      {message && (
-        <p
-          className="success"
-          role="status"
-        >
-          {message}
-        </p>
-      )}
-      <section className="category-panel">
-        <div className="panel-heading">
-          <h2>Products</h2>
-          <label>
-            Filter by category{' '}
-            <select
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-            >
-              <option value="">All categories</option>
-              {categories.map((c) => (
-                <option
-                  key={c.id}
-                  value={c.id}
-                >
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {loading ? (
+        {error && (
           <p
-            className="empty-state"
+            className="error"
+            role="alert"
+          >
+            {error}
+          </p>
+        )}
+        {message && (
+          <p
+            className="success"
             role="status"
           >
-            Loading products…
+            {message}
           </p>
-        ) : error ? (
-          <div className="empty-state">
-            <button
-              className="button secondary"
-              onClick={() => setRevision((value) => value + 1)}
-            >
-              Retry loading products
-            </button>
-          </div>
-        ) : !products.length ? (
-          <div className="empty-state product-empty">
-            <div
-              className="product-empty-art"
-              role="img"
-              aria-label="Add your first product"
-            >
-              <PackagePlus
-                size={76}
-                strokeWidth={1.2}
-              />
-            </div>
-            <h3>
-              {categoryId
-                ? 'No products in this category yet.'
-                : 'Your collection starts here.'}
-            </h3>
-            <p>
-              {categoryId
-                ? 'Choose another category or create a product.'
-                : 'Add your first wallet with a photo, a price, and a few details.'}
-            </p>
-            <button
-              className="button primary"
-              onClick={() => openEditor()}
-            >
-              <Plus size={18} /> Add your first product
-            </button>
-          </div>
-        ) : (
-          <div className="table-scroll">
-            <table className="products-table">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Category</th>
-                  <th>Price</th>
-                  <th>Stock</th>
-                  <th>Status</th>
-                  <th className="align-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id}>
-                    <td data-label="Product">
-                      <strong>{p.name}</strong>
-                      <ProductGallery
-                        product={p}
-                        compact
-                      />
-                      {/* <button
-                        type="button"
-                        role="switch"
-                        aria-checked={p.featuredimage === true}
-                        aria-label={`Feature ${p.name} in carousel`}
-                        disabled={busy}
-                        onClick={() => toggleFeatured(p)}
-                        className="featured-toggle"
-                      >
-                        {p.featuredimage ? 'Featured: On' : 'Featured: Off'}
-                      </button> */}
-                    </td>
-                    <td data-label="Category">
-                      {p.category?.name || 'Uncategorised'}
-                    </td>
-                    <td data-label="Price">{money(p.price)}</td>
-                    <td data-label="Stock">{p.stock}</td>
-                    <td data-label="Status">
-                      <span
-                        className={`status-badge ${p.isActive ? 'is-active' : ''}`}
-                      >
-                        {p.isActive ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="table-actions">
-                        <button
-                          className="button secondary"
-                          disabled={busy}
-                          aria-label={`Edit ${p.name}`}
-                          onClick={() => openEditor(p)}
-                        >
-                          <Pencil size={16} /> Edit
-                        </button>
-                        <button
-                          className="button secondary delete-button"
-                          disabled={busy}
-                          aria-label={`Delete ${p.name}`}
-                          onClick={() => {
-                            setDeleteError('');
-                            setDeleting(p);
-                          }}
-                        >
-                          <Trash2 size={16} /> Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         )}
-      </section>
+        <section className="category-panel product-list-panel">
+          <div className="panel-heading">
+            <h2>Products</h2>
+            <label>
+              Filter by category{' '}
+              <select
+                value={categoryId}
+                onChange={(e) => setCategoryId(e.target.value)}
+              >
+                <option value="">All categories</option>
+                {categories.map((c) => (
+                  <option
+                    key={c.id}
+                    value={c.id}
+                  >
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {loading ? (
+            <p
+              className="empty-state"
+              role="status"
+            >
+              Loading products…
+            </p>
+          ) : error ? (
+            <div className="empty-state">
+              <button
+                className="button secondary"
+                onClick={() => setRevision((value) => value + 1)}
+              >
+                Retry loading products
+              </button>
+            </div>
+          ) : !products.length ? (
+            <div className="empty-state product-empty">
+              <div
+                className="product-empty-art"
+                role="img"
+                aria-label="Add your first product"
+              >
+                <PackagePlus
+                  size={76}
+                  strokeWidth={1.2}
+                />
+              </div>
+              <h3>
+                {categoryId
+                  ? 'No products in this category yet.'
+                  : 'Your collection starts here.'}
+              </h3>
+              <p>
+                {categoryId
+                  ? 'Choose another category or create a product.'
+                  : 'Add your first wallet with a photo, a price, and a few details.'}
+              </p>
+              <button
+                className="button primary"
+                onClick={() => openEditor()}
+              >
+                <Plus size={18} /> Add your first product
+              </button>
+            </div>
+          ) : (
+            <div className="table-scroll">
+              <table className="products-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Category</th>
+                    <th>Price</th>
+                    <th>Stock</th>
+                    <th>Status</th>
+                    <th className="align-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {products.map((p) => (
+                    <tr key={p.id}>
+                      <td data-label="Product">
+                        <a
+                          className="product-name-link"
+                          aria-label={`View ${p.name} details`}
+                          href={`#product=${encodeURIComponent(p.id)}`}
+                        >
+                          <strong>{p.name}</strong>
+                          <span>View details</span>
+                        </a>
+                      </td>
+                      <td data-label="Category">
+                        {p.category?.name || 'Uncategorised'}
+                      </td>
+                      <td data-label="Price">{money(p.price)}</td>
+                      <td
+                        className="product-extra"
+                        data-label="Stock"
+                      >
+                        {p.stock}
+                      </td>
+                      <td
+                        className="product-extra"
+                        data-label="Status"
+                      >
+                        <span
+                          className={`status-badge ${p.isActive ? 'is-active' : ''}`}
+                        >
+                          {p.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="product-actions-cell">
+                        <ProductActions name={p.name}>
+                          <button
+                            className="button secondary"
+                            disabled={busy}
+                            aria-label={`Edit ${p.name}`}
+                            onClick={() => openEditor(p)}
+                          >
+                            <Pencil size={16} /> Edit
+                          </button>
+                          <button
+                            className="button secondary delete-button"
+                            disabled={busy}
+                            aria-label={`Delete ${p.name}`}
+                            onClick={() => {
+                              setDeleteError('');
+                              setDeleting(p);
+                            }}
+                          >
+                            <Trash2 size={16} /> Delete
+                          </button>
+                        </ProductActions>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+      {showingDetails && (
+        <div className="product-detail-page">
+          <a
+            className="button secondary"
+            href="#"
+          >
+            ← Back to products
+          </a>
+          {loading ? (
+            <p role="status">Loading product…</p>
+          ) : (
+            !viewing && <p role="alert">{error || 'Product not found.'}</p>
+          )}
+          {viewing && (
+            <>
+              <h1>{viewing.name}</h1>
+              <section
+                className="product-details"
+                aria-label="Product details"
+              >
+                <ProductGallery product={viewing} />
+                <dl className="product-detail-facts">
+                  <div>
+                    <dt>Category</dt>
+                    <dd>{viewing.category?.name || 'Uncategorised'}</dd>
+                  </div>
+                  <div>
+                    <dt>Price</dt>
+                    <dd>{money(viewing.price)}</dd>
+                  </div>
+                  <div>
+                    <dt>Stock</dt>
+                    <dd>{viewing.stock}</dd>
+                  </div>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{viewing.isActive ? 'Active' : 'Inactive'}</dd>
+                  </div>
+                </dl>
+                <p className="product-description">
+                  {viewing.description || 'No description yet.'}
+                </p>
+                <div className="form-actions">
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      openEditor(viewing);
+                    }}
+                  >
+                    <Pencil size={16} /> Edit product
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
+        </div>
+      )}
       {editing && (
         <Dialog
           title={editing.id ? 'Edit product' : 'Create a product'}
@@ -417,15 +508,14 @@ export default function Products({ categories, onError }) {
                   When enabled, the product cover image appears in the carousel.
                 </small>
               </label>
-              {!editing.id && (
-                <>
-                  <h3 className="product-section-title">
-                    <span>02</span> Product photos
-                  </h3>
-                  <ProductPhotos />
-                  <ProductPhotos multiple />
-                </>
-              )}
+              <h3 className="product-section-title">
+                <span>02</span> Product photos
+              </h3>
+              <ProductPhotos editing={!!editing.id} />
+              <ProductPhotos
+                multiple
+                editing={!!editing.id}
+              />
             </div>
             {formError && (
               <p

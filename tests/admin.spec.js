@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 test('cookie session restores, products upload and category filter reaches API', async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
   let signedIn = false;
   let uploaded = '';
   let filtered = false;
@@ -55,6 +56,11 @@ test('cookie session restores, products upload and category filter reaches API',
     path: `test-results/products-create-${test.info().project.name}.png`,
     fullPage: true,
   });
+  const formDialog = page.getByRole('dialog');
+  expect(
+    await formDialog.evaluate((el) => el.scrollWidth <= el.clientWidth),
+  ).toBe(true);
+  await expect(page.getByLabel('Name', { exact: true })).toBeVisible();
   await page.getByLabel('Name', { exact: true }).fill('Travel wallet');
   await page.getByLabel('Price (NPR)').fill('1200');
   const image = {
@@ -239,7 +245,7 @@ test('deleting a product requires confirmation and failed deletion can be retrie
   expect(deletes).toBe(2);
 });
 
-test('cover and detail photos appear in the list and editor', async ({
+test('photos are absent from the list and visible in product details and editor', async ({
   page,
 }) => {
   const photoUrl =
@@ -263,15 +269,26 @@ test('cover and detail photos appear in the list and editor', async ({
     return route.fulfill({ json: path === '/api/category' ? [] : [product] });
   });
   await page.goto('/');
+  await expect(page.locator('.products-table img')).toHaveCount(0);
+  await expect(page.locator('.products-table .product-gallery')).toHaveCount(0);
+  await page.getByRole('link', { name: 'View Travel wallet details' }).click();
   await expect(
-    page.getByRole('img', { name: 'Travel wallet cover image', exact: true }),
+    page
+      .getByRole('region', { name: 'Product details', exact: true })
+      .getByRole('img', {
+        name: 'Travel wallet cover image',
+        exact: true,
+      }),
   ).toBeVisible();
   await expect(
-    page.getByRole('img', {
-      name: 'Travel wallet detail image 1',
-      exact: true,
-    }),
+    page
+      .getByRole('region', { name: 'Product details', exact: true })
+      .getByRole('img', {
+        name: 'Travel wallet detail image 1',
+        exact: true,
+      }),
   ).toBeVisible();
+  await page.getByRole('link', { name: 'Back to products' }).click();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -295,4 +312,155 @@ test('cover and detail photos appear in the list and editor', async ({
   await expect(
     dialog.getByRole('link', { name: 'Open Travel wallet cover image' }),
   ).toHaveAttribute('href', photoUrl);
+});
+
+for (const kind of ['cover', 'details']) {
+  test(`existing product ${kind} images can be replaced`, async ({ page }) => {
+    const product = {
+      id: 'wallet',
+      name: 'Everyday wallet',
+      price: 100,
+      stock: 2,
+      isActive: true,
+      featuredimage: false,
+    };
+    const patches = [];
+    await page.route('**/api/**', async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === '/api/auth/me')
+        return route.fulfill({
+          json: { role: 'admin', email: 'admin@example.com' },
+        });
+      if (path === '/api/category') return route.fulfill({ json: [] });
+      if (request.method() === 'PATCH') {
+        patches.push({
+          type: request.headers()['content-type'],
+          body: request.postDataBuffer().toString(),
+        });
+        return route.fulfill({ json: product });
+      }
+      return route.fulfill({ json: [product] });
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Edit Everyday wallet' }).click();
+    const input = page.getByLabel(
+      kind === 'cover' ? 'Cover image' : 'Detail images (up to 5)',
+      { exact: true },
+    );
+    await input.setInputFiles({
+      name: 'replacement.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    });
+    await expect(
+      page.getByRole('img', { name: 'Selected photo: replacement.png' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(patches).toHaveLength(2);
+    expect(patches[0].type).toContain('multipart/form-data; boundary=');
+    expect(patches[0].body).toContain(
+      `name="${kind === 'cover' ? 'coverImage' : 'images'}"; filename="replacement.png"`,
+    );
+    expect(patches[0].body).not.toContain(
+      `name="${kind === 'cover' ? 'images' : 'coverImage'}"`,
+    );
+    expect(JSON.parse(patches[1].body)).toMatchObject({
+      name: 'Everyday wallet',
+      categoryId: null,
+      featuredimage: false,
+    });
+    await expect(
+      page.getByRole('status').filter({ hasText: 'updated successfully' }),
+    ).toBeVisible();
+  });
+}
+
+test('mobile products show concise rows, actions menu, and navigable details', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const product = {
+    id: 'wallet',
+    name: 'Everyday wallet',
+    price: 1200,
+    stock: 3,
+    isActive: true,
+    category: { name: 'Bifolds' },
+  };
+  await page.route('**/api/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    return route.fulfill({
+      json:
+        path === '/api/auth/me'
+          ? { role: 'admin' }
+          : path === '/api/category'
+            ? []
+            : [product],
+    });
+  });
+  await page.goto('/');
+  const row = page.locator('.products-table tbody tr');
+  await expect(row.getByText('Bifolds')).toBeVisible();
+  await expect(row.getByText('Rs. 1,200')).toBeVisible();
+  await expect(row.locator('[data-label="Stock"]')).toBeHidden();
+  await expect(row.locator('[data-label="Status"]')).toBeHidden();
+  await expect(
+    page.getByRole('button', { name: 'Edit Everyday wallet' }),
+  ).toBeHidden();
+  await expect(
+    page.getByRole('button', { name: 'Delete Everyday wallet' }),
+  ).toBeHidden();
+  const actions = page.getByRole('button', {
+    name: 'Actions for Everyday wallet',
+  });
+  await actions.click();
+  await expect(
+    page.getByRole('button', { name: 'Delete Everyday wallet' }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: 'test-results/mobile-product-actions.png',
+    fullPage: true,
+  });
+  await page.keyboard.press('Escape');
+  await expect(actions).toHaveAttribute('aria-expanded', 'false');
+  await actions.click();
+  await page.getByRole('button', { name: 'Edit Everyday wallet' }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Edit product' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await actions.click();
+  await page.getByRole('button', { name: 'Delete Everyday wallet' }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Delete product?' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Keep product' }).click();
+  await page
+    .getByRole('link', { name: 'View Everyday wallet details' })
+    .click();
+  await expect(page).toHaveURL(/#product=wallet$/);
+  await expect(
+    page.getByRole('heading', { name: 'Everyday wallet', exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('.products-table')).toBeHidden();
+  await page.reload();
+  await expect(
+    page.getByRole('heading', { name: 'Everyday wallet', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('link', { name: 'Back to products' }).click();
+  await expect(row).toBeVisible();
+  await page.goBack();
+  await expect(
+    page.getByRole('heading', { name: 'Everyday wallet', exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });
